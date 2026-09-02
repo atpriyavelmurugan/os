@@ -1,0 +1,35 @@
+class Solution:
+    def getOrder(self, tasks: List[List[int]]) -> List[int]:
+    
+        decorated_tasks = []
+        for i, task in enumerate(tasks):
+            decorated_tasks.append([task[0], task[1], i])
+        
+    
+        decorated_tasks.sort(key=lambda x: x[0])
+    
+        result = []
+        min_heap = []
+    
+        time = 0
+        task_idx = 0
+        n = len(tasks)
+    
+    
+        while task_idx < n or min_heap:
+
+            if not min_heap and time < decorated_tasks[task_idx][0]:
+                time = decorated_tasks[task_idx][0]
+            
+       
+            while task_idx < n and decorated_tasks[task_idx][0] <= time:
+            
+                 heapq.heappush(min_heap, (decorated_tasks[task_idx][1], decorated_tasks[task_idx][2]))
+                 task_idx += 1
+            
+       
+            proc_time, orig_idx = heapq.heappop(min_heap)
+            time += proc_time
+            result.append(orig_idx)
+        
+        return result   
