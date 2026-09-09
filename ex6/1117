@@ -1,0 +1,233 @@
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.CyclicBarrier;
+ifndef SEMAPHORE_H
+#define SEMAPHORE_H
+
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
+#include <unistd.h>
+#include <stdlib.h>
+
+#define size 5          // Circular buffer size fixed at 5
+#define mutex 0
+#define full 1
+#define empty 2
+
+union semaphore {
+    int val;
+    struct semid_ds *buf;
+    unsigned short *array;
+};
+
+void wait_sem(int, int);
+void signal_sem(int, int);
+
+#endif
+
+[24bcs035@mepcolinux EX5]$cat imp.c
+#include "header.h"
+
+void wait_sem(int sid, int sno) {
+    struct sembuf s;
+    s.sem_num = sno;
+    s.sem_op = -1;
+    s.sem_flg = SEM_UNDO;
+    semop(sid, &s, 1);
+}
+
+void signal_sem(int sid, int sno) {
+    struct sembuf s;
+    s.sem_num = sno;
+    s.sem_op = 1;
+    s.sem_flg = SEM_UNDO;
+    semop(sid, &s, 1);
+}
+
+[24bcs035@mepcolinux EX5]$cat c.c
+#include "header.h"
+#include <stdlib.h>
+
+int main() {
+    union semaphore snum;
+    int sid, out, num, *buf, s;
+    unsigned short a[3]; // FIXED: Properly allocated memory space for 3 elements
+    out = 0;
+
+    s = shmget(3306, sizeof(int) * size, IPC_CREAT | 0666);
+    if (s == -1) {
+        perror("shmget");
+        exit(1);
+    }
+
+    buf = (int *)shmat(s, NULL, 0);
+    if (buf == (void *)-1) {
+        perror("shmat");
+        exit(1);
+    }
+
+    sid = semget(0607, 3, IPC_CREAT | 0666);
+    if (sid == -1) {
+        perror("semget");
+        exit(1);
+    }
+
+    // Initialize semaphores safely if consumer starts before producer
+    if (semctl(sid, empty, GETVAL) == 0 && semctl(sid, full, GETVAL) == 0) {
+        a[mutex] = 1;
+        a[full]  = 0;
+        a[empty] = size;
+        snum.array = a;
+        semctl(sid, 0, SETALL, snum);
+    }
+
+    printf("Consumer Ready (Will exit when Producer sends -1)\n");
+
+    while (1) {
+        wait_sem(sid, full);
+        wait_sem(sid, mutex);
+
+        num = buf[out % size]; // Circular mapping tracking
+
+        if (num == -1) {
+            signal_sem(sid, mutex);
+            signal_sem(sid, empty);
+            break;
+        }
+
+        printf("Consumed from index [%d]: %d\n", out % size, num);
+        fflush(stdout);
+        out++;
+
+        signal_sem(sid, mutex);
+        signal_sem(sid, empty);
+    }
+
+    shmdt(buf);
+    printf("Consumer Exited Gracefully.\n");
+    return 0;
+}
+
+[24bcs035@mepcolinux EX5]$cat p.c
+#include "header.h"
+#include <stdlib.h>
+
+int main() {
+    union semaphore snum;
+    int sid, in, num, *buf, s;
+    unsigned short a[3]; // FIXED: Properly allocated memory space for 3 elements
+    in = 0;
+
+    s = shmget(3306, sizeof(int) * size, IPC_CREAT | 0666);
+    if (s == -1) {
+        perror("shmget");
+        exit(1);
+    }
+
+    buf = (int *)shmat(s, NULL, 0);
+    if (buf == (void *)-1) {
+        perror("shmat");
+        exit(1);
+    }
+
+    sid = semget(0607, 3, IPC_CREAT | 0666);
+    if (sid == -1) {
+        perror("semget");
+        exit(1);
+    }
+
+    // Initialize semaphores only if they aren't primed yet (Prevents overwriting if consumer started first)
+    if (semctl(sid, empty, GETVAL) == 0 && semctl(sid, full, GETVAL) == 0) {
+        a[mutex] = 1;
+        a[full]  = 0;
+        a[empty] = size;
+        snum.array = a;
+        semctl(sid, 0, SETALL, snum);
+    }
+
+    printf("Producer Ready (Enter -1 to exit)\n");
+
+    while (1) {
+        printf("Enter data: ");
+        fflush(stdout);
+        if (scanf("%d", &num) != 1) break;
+
+        wait_sem(sid, empty);
+        wait_sem(sid, mutex);
+
+        buf[in % size] = num; // Circular mapping tracking
+
+        if (num == -1) {
+            printf("Sending termination signal to consumer...\n");
+            signal_sem(sid, mutex);
+            signal_sem(sid, full);
+            break;
+        }
+
+        printf("Produced at index [%d]: %d\n", in % size, num);
+        in++;
+
+        signal_sem(sid, mutex);
+        signal_sem(sid, full);
+    }
+
+    sleep(1); // Give consumer time to read the final exit code
+
+    semctl(sid, 0, IPC_RMID);
+    shmdt(buf);
+    shmctl(s, IPC_RMID, NULL);
+    printf("IPC cleared\n");
+    return 0;
+}
+class H2O {
+
+    // Semaphores to track available slots for a single molecule
+    private final Semaphore hSem = new Semaphore(2);
+    private final Semaphore oSem = new Semaphore(1);
+    
+    // A barrier that resets after 3 threads (2H + 1O) arrive
+    private final CyclicBarrier barrier = new CyclicBarrier(3);
+
+    public H2O() {
+        
+    }
+
+    public void hydrogen(Runnable releaseHydrogen) throws InterruptedException {
+        // Acquire a hydrogen permit (only 2 allowed per molecule batch)
+        hSem.acquire();
+        
+        try {
+            // Wait for 3 threads (2 H and 1 O) to gather at the barrier
+            barrier.await();
+        } catch (Exception e) {
+            // Handle barrier exceptions if threads are interrupted
+        }
+        
+        // releaseHydrogen.run() outputs "H". Do not change or remove this line.
+        releaseHydrogen.run();
+        
+        // If two hydrogen threads have run, we reset the permits for the next batch
+        // We can safely release the permit back after the thread passes
+        hSem.release();
+    }
+
+    public void oxygen(Runnable releaseOxygen) throws InterruptedException {
+        // Acquire the single oxygen permit allowed per molecule batch
+        oSem.acquire();
+        
+        try {
+            // Wait for 3 threads (2 H and 1 O) to gather at the barrier
+            barrier.await();
+        } catch (Exception e) {
+            // Handle barrier exceptions
+        }
+
+        // releaseOxygen.run() outputs "O". Do not change or remove this line.
+        releaseOxygen.run();
+        
+        // Release the permit back for the next batch
+        oSem.release();
+    }
+}
