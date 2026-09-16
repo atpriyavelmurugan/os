@@ -1,0 +1,160 @@
+#include <stdlib.h>
+#include <string.h>
+
+// Doubly Linked List node representing the cache items
+typedef struct Node {
+    int key;
+    int val;
+    struct Node* prev;
+    struct Node* next;
+} Node;
+
+// Hash map entry to map keys directly to Node pointers
+typedef struct HashEntry {
+    int key;
+    Node* node;
+    struct HashEntry* next; // Chaining for collisions
+} HashEntry;
+
+typedef struct {
+    int capacity;
+    int size;
+    int hashSize;
+    Node* head;
+    Node* tail;
+    HashEntry** buckets;
+} LRUCache;
+
+// Helper to create a new list node
+Node* createNode(int key, int val) {
+    Node* node = (Node*)malloc(sizeof(Node));
+    node->key = key;
+    node->val = val;
+    node->prev = NULL;
+    node->next = NULL;
+    return node;
+}
+
+// Map functions
+int getHash(int key, int hashSize) {
+    return abs(key) % hashSize;
+}
+
+void addToHash(LRUCache* cache, int key, Node* node) {
+    int hash = getHash(key, cache->hashSize);
+    HashEntry* entry = (HashEntry*)malloc(sizeof(HashEntry));
+    entry->key = key;
+    entry->node = node;
+    entry->next = cache->buckets[hash];
+    cache->buckets[hash] = entry;
+}
+
+Node* findInHash(LRUCache* cache, int key) {
+    int hash = getHash(key, cache->hashSize);
+    HashEntry* curr = cache->buckets[hash];
+    while (curr) {
+        if (curr->key == key) return curr->node;
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+void removeFromHash(LRUCache* cache, int key) {
+    int hash = getHash(key, cache->hashSize);
+    HashEntry* curr = cache->buckets[hash];
+    HashEntry* prev = NULL;
+    while (curr) {
+        if (curr->key == key) {
+            if (prev) prev->next = curr->next;
+            else cache->buckets[hash] = curr->next;
+            free(curr);
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+}
+
+// Doubly Linked List manipulation routines
+void removeNode(LRUCache* cache, Node* node) {
+    if (node->prev) node->prev->next = node->next;
+    else cache->head = node->next;
+
+    if (node->next) node->next->prev = node->prev;
+    else cache->tail = node->prev;
+}
+
+void moveToHead(LRUCache* cache, Node* node) {
+    removeNode(cache, node);
+    node->next = cache->head;
+    node->prev = NULL;
+    if (cache->head) cache->head->prev = node;
+    cache->head = node;
+    if (!cache->tail) cache->tail = node;
+}
+
+void addToHead(LRUCache* cache, Node* node) {
+    node->next = cache->head;
+    node->prev = NULL;
+    if (cache->head) cache->head->prev = node;
+    cache->head = node;
+    if (!cache->tail) cache->tail = node;
+}
+
+// Main Interface API
+LRUCache* lRUCacheCreate(int capacity) {
+    LRUCache* cache = (LRUCache*)malloc(sizeof(LRUCache));
+    cache->capacity = capacity;
+    cache->size = 0;
+    cache->hashSize = capacity * 2 + 1; // Prime-like sizes reduce collisions
+    cache->head = NULL;
+    cache->tail = NULL;
+    cache->buckets = (HashEntry**)calloc(cache->hashSize, sizeof(HashEntry*));
+    return cache;
+}
+
+int lRUCacheGet(LRUCache* obj, int key) {
+    Node* node = findInHash(obj, key);
+    if (!node) return -1;
+    moveToHead(obj, node);
+    return node->val;
+}
+
+void lRUCachePut(LRUCache* obj, int key, int value) {
+    Node* node = findInHash(obj, key);
+    if (node) {
+        node->val = value;
+        moveToHead(obj, node);
+    } else {
+        if (obj->size >= obj->capacity) {
+            Node* lru = obj->tail;
+            removeFromHash(obj, lru->key);
+            removeNode(obj, lru);
+            free(lru);
+            obj->size--;
+        }
+        Node* newNode = createNode(key, value);
+        addToHead(obj, newNode);
+        addToHash(obj, key, newNode);
+        obj->size++;
+    }
+}
+
+void lRUCacheFree(LRUCache* obj) {
+    Node* curr = obj->head;
+    while (curr) {
+        Node* next = curr->next;
+        free(curr);
+        curr = next;
+    }
+    for (int i = 0; i < obj->hashSize; i++) {
+        HashEntry* entry = obj->buckets[i];
+        while (entry) {
+            HashEntry* next = entry->next;
+            free(entry);
+            entry = next;
+        }
+    }
+    free(obj->buckets);
+    free(obj);
+}
