@@ -1,0 +1,171 @@
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct Node {
+    int key, val, freq;
+    struct Node *prev, *next;
+} Node;
+
+typedef struct DList {
+    Node *head, *tail;
+} DList;
+
+typedef struct HashNode {
+    int key;
+    void* ptr; // Polymorphic container for both Key Map or Freq Map
+    struct HashNode* next;
+} HashNode;
+
+typedef struct {
+    int capacity, size, minFreq, hashSize;
+    HashNode** keyMap;
+    HashNode** freqMap;
+} LFUCache;
+
+// Hash routines
+int lfuHash(int key, int size) { return abs(key) % size; }
+
+void hashPut(HashNode** table, int size, int key, void* ptr) {
+    int idx = lfuHash(key, size);
+    HashNode* curr = table[idx];
+    while(curr) {
+        if(curr->key == key) { curr->ptr = ptr; return; }
+        curr = curr->next;
+    }
+    HashNode* n = (HashNode*)malloc(sizeof(HashNode));
+    n->key = key; n->ptr = ptr; n->next = table[idx];
+    table[idx] = n;
+}
+
+void* hashGet(HashNode** table, int size, int key) {
+    int idx = lfuHash(key, size);
+    HashNode* curr = table[idx];
+    while(curr) {
+        if(curr->key == key) return curr->ptr;
+        curr = curr->next;
+    }
+    return NULL;
+}
+
+void hashDel(HashNode** table, int size, int key) {
+    int idx = lfuHash(key, size);
+    HashNode *curr = table[idx], *prev = NULL;
+    while(curr) {
+        if(curr->key == key) {
+            if(prev) prev->next = curr->next;
+            else table[idx] = curr->next;
+            free(curr);
+            return;
+        }
+        prev = curr; curr = curr->next;
+    }
+}
+
+// Doubly Linked List Routines
+DList* createDList() {
+    DList* l = (DList*)malloc(sizeof(DList));
+    l->head = l->tail = NULL;
+    return l;
+}
+
+void listPush(DList* l, Node* n) {
+    n->next = l->head; n->prev = NULL;
+    if(l->head) l->head->prev = n;
+    l->head = n;
+    if(!l->tail) l->tail = n;
+}
+
+void listPop(DList* l, Node* n) {
+    if(n->prev) n->prev->next = n->next;
+    else l->head = n->next;
+    if(n->next) n->next->prev = n->prev;
+    else l->tail = n->prev;
+}
+
+// Cache Logic Operations
+void updateFreq(LFUCache* obj, Node* node) {
+    int oldFreq = node->freq;
+    DList* oldList = (DList*)hashGet(obj->freqMap, obj->hashSize, oldFreq);
+    listPop(oldList, node);
+    
+    if(oldList->head == NULL && obj->minFreq == oldFreq) {
+        obj->minFreq++;
+    }
+    
+    node->freq++;
+    DList* newList = (DList*)hashGet(obj->freqMap, obj->hashSize, node->freq);
+    if(!newList) {
+        newList = createDList();
+        hashPut(obj->freqMap, obj->hashSize, node->freq, newList);
+    }
+    listPush(newList, node);
+}
+
+LFUCache* lFUCacheCreate(int capacity) {
+    LFUCache* cache = (LFUCache*)malloc(sizeof(LFUCache));
+    cache->capacity = capacity; cache->size = 0; cache->minFreq = 0;
+    cache->hashSize = capacity > 0 ? capacity * 2 + 1 : 11;
+    cache->keyMap = (HashNode**)calloc(cache->hashSize, sizeof(HashNode*));
+    cache->freqMap = (HashNode**)calloc(cache->hashSize, sizeof(HashNode*));
+    return cache;
+}
+
+int lFUCacheGet(LFUCache* obj, int key) {
+    if(obj->capacity == 0) return -1;
+    Node* node = (Node*)hashGet(obj->keyMap, obj->hashSize, key);
+    if(!node) return -1;
+    updateFreq(obj, node);
+    return node->val;
+}
+
+void lFUCachePut(LFUCache* obj, int key, int value) {
+    if(obj->capacity == 0) return;
+    Node* node = (Node*)hashGet(obj->keyMap, obj->hashSize, key);
+    if(node) {
+        node->val = value;
+        updateFreq(obj, node);
+        return;
+    }
+    
+    if(obj->size >= obj->capacity) {
+        DList* minList = (DList*)hashGet(obj->freqMap, obj->hashSize, obj->minFreq);
+        Node* evict = minList->tail;
+        listPop(minList, evict);
+        hashDel(obj->keyMap, obj->hashSize, evict->key);
+        free(evict);
+        obj->size--;
+    }
+    
+    Node* newNode = (Node*)malloc(sizeof(Node));
+    newNode->key = key; newNode->val = value; newNode->freq = 1;
+    obj->minFreq = 1;
+    
+    DList* list1 = (DList*)hashGet(obj->freqMap, obj->hashSize, 1);
+    if(!list1) {
+        list1 = createDList();
+        hashPut(obj->freqMap, obj->hashSize, 1, list1);
+    }
+    listPush(list1, newNode);
+    hashPut(obj->keyMap, obj->hashSize, key, newNode);
+    obj->size++;
+}
+
+void lFUCacheFree(LFUCache* obj) {
+    for (int i = 0; i < obj->hashSize; i++) {
+        HashNode* curr = obj->keyMap[i];
+        while (curr) {
+            Node* n = (Node*)curr->ptr;
+            HashNode* next = curr->next;
+            free(n); free(curr);
+            curr = next;
+        }
+        HashNode* fCurr = obj->freqMap[i];
+        while(fCurr) {
+            DList* l = (DList*)fCurr->ptr;
+            HashNode* next = fCurr->next;
+            free(l); free(fCurr);
+            fCurr = next;
+        }
+    }
+    free(obj->keyMap); free(obj->freqMap); free(obj);
+}
